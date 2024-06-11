@@ -16,7 +16,7 @@ aiocache.logger.setLevel(logging.WARNING)
 
 @cached(ttl=120)
 async def get_spr_price():
-    return (await get_spr_market_data())["current_price"]["usd"]
+    return (await get_spr_market_data())["last_price"]
 
 
 @cached(ttl=300)
@@ -24,12 +24,12 @@ async def get_spr_market_data():
     global FLOOD_DETECTED
     global CACHE
     if not FLOOD_DETECTED or time.time() - FLOOD_DETECTED > 300:
-        _logger.debug("Querying CoinGecko now.")
+        _logger.debug("Querying NonKYC now.")
         async with aiohttp.ClientSession() as session:
-            async with session.get("https://api.coingecko.com/api/v3/coins/spectre", timeout=10) as resp:
+            async with session.get("https://api.nonkyc.io/api/v2/ticker/SPR%2FUSDT", headers={"accept": "application/json"}, timeout=10) as resp:
                 if resp.status == 200:
                     FLOOD_DETECTED = False
-                    CACHE = (await resp.json())["market_data"]
+                    CACHE = await resp.json()
                     return CACHE
                 elif resp.status == 429:
                     FLOOD_DETECTED = time.time()

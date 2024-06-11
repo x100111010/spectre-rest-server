@@ -1,7 +1,6 @@
 # encoding: utf-8
 
 from pydantic import BaseModel
-
 from helper import get_spr_price
 from server import app, spectred_client
 
@@ -13,11 +12,11 @@ class MarketCapResponse(BaseModel):
 @app.get("/info/marketcap", response_model=MarketCapResponse | str, tags=["Spectre network info"])
 async def get_marketcap(stringOnly: bool = False):
     """
-    Get $SPR price and market cap. Price info is from coingecko.com
+    Get $SPR price and market cap. Price info is from NonKYC API.
     """
     spr_price = await get_spr_price()
     resp = await spectred_client.request("getCoinSupplyRequest")
-    mcap = round(float(resp["getCoinSupplyResponse"]["circulatingSompi"]) / 100000000 * spr_price)
+    mcap = round(float(resp["getCoinSupplyResponse"]["circulatingSompi"]) / 100000000 * float(spr_price))
 
     if not stringOnly:
         return {
