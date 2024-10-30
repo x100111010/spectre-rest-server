@@ -11,7 +11,7 @@ class SpectredInfoResponse(BaseModel):
     serverVersion: str = "0.12.2"
     isUtxoIndexed: bool = True
     isSynced: bool = True
-    p2pIdHashed : str = "36a17cd8644eef34fc7fe4719655e06dbdf117008900c46975e66c35acd09b01"
+    p2pIdHashed: str = "36a17cd8644eef34fc7fe4719655e06dbdf117008900c46975e66c35acd09b01"
 
 
 @app.get("/info/spectred", response_model=SpectredInfoResponse, tags=["Spectre network info"])

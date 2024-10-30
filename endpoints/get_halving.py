@@ -11,7 +11,7 @@ from server import app, spectred_client
 
 class HalvingResponse(BaseModel):
     nextHalvingTimestamp: int = 1714996962650
-    nextHalvingDate: str = '2024-05-06 12:02:42 UTC'
+    nextHalvingDate: str = "2024-05-06 12:02:42 UTC"
     nextHalvingAmount: float = 12
 
 
@@ -40,8 +40,9 @@ async def get_halving(field: str | None = None):
         return PlainTextResponse(content=str(next_halving_timestamp))
 
     elif field == "nextHalvingDate":
-        return PlainTextResponse(content=datetime.utcfromtimestamp(next_halving_timestamp)
-                                 .strftime('%Y-%m-%d %H:%M:%S UTC'))
+        return PlainTextResponse(
+            content=datetime.utcfromtimestamp(next_halving_timestamp).strftime("%Y-%m-%d %H:%M:%S UTC")
+        )
 
     elif field == "nextHalvingAmount":
         return PlainTextResponse(content=str(future_reward))
@@ -49,6 +50,6 @@ async def get_halving(field: str | None = None):
     else:
         return {
             "nextHalvingTimestamp": next_halving_timestamp,
-            "nextHalvingDate": datetime.utcfromtimestamp(next_halving_timestamp).strftime('%Y-%m-%d %H:%M:%S UTC'),
-            "nextHalvingAmount": future_reward
+            "nextHalvingDate": datetime.utcfromtimestamp(next_halving_timestamp).strftime("%Y-%m-%d %H:%M:%S UTC"),
+            "nextHalvingAmount": future_reward,
         }

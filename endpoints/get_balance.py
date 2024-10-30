@@ -1,31 +1,27 @@
 # encoding: utf-8
-import os
 
 from fastapi import Path, HTTPException
 from pydantic import BaseModel
 
+from constants import ADDRESS_EXAMPLE, REGEX_SPECTRE_ADDRESS
 from server import app, spectred_client
-
-SPECTRE_ADDRESS_PREFIX = os.getenv("ADDRESS_PREFIX", "spectre")
 
 
 class BalanceResponse(BaseModel):
-    address: str = SPECTRE_ADDRESS_PREFIX + ":pzhh76qc82wzduvsrd9xh4zde9qhp0xc8rl7qu2mvl2e42uvdqt75zrcgpm00"
+    address: str = ADDRESS_EXAMPLE
     balance: int = 38240000000
 
 
 @app.get("/addresses/{spectreAddress}/balance", response_model=BalanceResponse, tags=["Spectre addresses"])
 async def get_balance_from_spectre_address(
-        spectreAddress: str = Path(
-            description="Spectre address as string e.g. " + SPECTRE_ADDRESS_PREFIX + ":pzhh76qc82wzduvsrd9xh4zde9qhp0xc8rl7qu2mvl2e42uvdqt75zrcgpm00",
-            regex="^" + SPECTRE_ADDRESS_PREFIX + "\:[a-z0-9]{61,63}$")):
+    spectreAddress: str = Path(
+        description=f"Spectre address as string e.g. {ADDRESS_EXAMPLE}", regex=REGEX_SPECTRE_ADDRESS
+    ),
+):
     """
     Get balance for a given spectre address
     """
-    resp = await spectred_client.request("getBalanceByAddressRequest",
-                                       params={
-                                           "address": spectreAddress
-                                       })
+    resp = await spectred_client.request("getBalanceByAddressRequest", params={"address": spectreAddress})
 
     try:
         resp = resp["getBalanceByAddressResponse"]
@@ -35,6 +31,9 @@ async def get_balance_from_spectre_address(
         else:
             raise
 
+    if resp.get("error"):
+        raise HTTPException(500, resp["error"])
+
     try:
         balance = int(resp["balance"])
 
@@ -42,7 +41,4 @@ async def get_balance_from_spectre_address(
     except KeyError:
         balance = 0
 
-    return {
-        "address": spectreAddress,
-        "balance": balance
-    }
+    return {"address": spectreAddress, "balance": balance}

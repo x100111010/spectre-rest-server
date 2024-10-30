@@ -1,23 +1,28 @@
 # encoding: utf-8
-import os
+import re
+import time
 from enum import Enum
 from typing import List
 
-from fastapi import Path, Query
+from fastapi import Path, Query, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import text, func
 from sqlalchemy.future import select
+from starlette.responses import Response
 
+from constants import ADDRESS_EXAMPLE, REGEX_SPECTRE_ADDRESS
 from dbsession import async_session
 from endpoints import sql_db_only
 from endpoints.get_transactions import search_for_transactions, TxSearch, TxModel
+from models.AddressKnown import AddressKnown
 from models.TxAddrMapping import TxAddrMapping
 from server import app
 
-DESC_RESOLVE_PARAM = "Use this parameter if you want to fetch the TransactionInput previous outpoint details." \
-                     " Light fetches only the address and amount. Full fetches the whole TransactionOutput and " \
-                     "adds it into each TxInput."
-SPECTRE_ADDRESS_PREFIX = os.getenv("ADDRESS_PREFIX", "spectre")
+DESC_RESOLVE_PARAM = (
+    "Use this parameter if you want to fetch the TransactionInput previous outpoint details."
+    " Light fetches only the address and amount. Full fetches the whole TransactionOutput and "
+    "adds it into each TxInput."
+)
 
 
 class TransactionsReceivedAndSpent(BaseModel):
@@ -34,23 +39,30 @@ class TransactionCount(BaseModel):
     total: int
 
 
+class AddressName(BaseModel):
+    address: str
+    name: str
+
+
 class PreviousOutpointLookupMode(str, Enum):
     no = "no"
     light = "light"
     full = "full"
 
 
-@app.get("/addresses/{spectreAddress}/transactions",
-         response_model=TransactionForAddressResponse,
-         response_model_exclude_unset=True,
-         tags=["Spectre addresses"],
-         deprecated=True)
+@app.get(
+    "/addresses/{spectreAddress}/transactions",
+    response_model=TransactionForAddressResponse,
+    response_model_exclude_unset=True,
+    tags=["Spectre addresses"],
+    openapi_extra={"strict_query_params": True},
+)
 @sql_db_only
 async def get_transactions_for_address(
-        spectreAddress: str = Path(
-            description="Spectre address as string e.g. " + SPECTRE_ADDRESS_PREFIX +
-                        ":pzhh76qc82wzduvsrd9xh4zde9qhp0xc8rl7qu2mvl2e42uvdqt75zrcgpm00",
-            regex="^" + SPECTRE_ADDRESS_PREFIX + "\:[a-z0-9]{61,63}$")):
+    spectreAddress: str = Path(
+        description="Spectre address as string e.g. " f"{ADDRESS_EXAMPLE}", regex=REGEX_SPECTRE_ADDRESS
+    ),
+):
     """
     Get all transactions for a given address from database
     """
@@ -61,54 +73,53 @@ async def get_transactions_for_address(
     # WHERE "script_public_key_address" = 'spectre:qp7d7rzrj34s2k3qlxmguuerfh2qmjafc399lj6606fc7s69l84h7mrj49hu6'
     #
     # ORDER by transactions_outputs.transaction_id
+    spectreAddress = re.sub(
+        r"^spectre(test)?:", "", spectreAddress
+    )  # Custom query bypasses the TypeDecorator, must handle it manually
     async with async_session() as session:
-        resp = await session.execute(text(f"""
-            SELECT transactions_outputs.transaction_id, transactions_outputs.index, transactions_inputs.transaction_id as inp_transaction,
-                    transactions.block_time, transactions.transaction_id
-            
-            FROM transactions
-			LEFT JOIN transactions_outputs ON transactions.transaction_id = transactions_outputs.transaction_id
-			LEFT JOIN transactions_inputs ON transactions_inputs.previous_outpoint_hash = transactions.transaction_id AND transactions_inputs.previous_outpoint_index = transactions_outputs.index
-            WHERE "script_public_key_address" = :spectreAddress
-			ORDER by transactions.block_time DESC
-			LIMIT 500"""),
-                                     {'spectreAddress': spectreAddress})
+        resp = await session.execute(
+            text("""
+            SELECT o.transaction_id, i.transaction_id
+            FROM transactions t
+            LEFT JOIN transactions_outputs o ON t.transaction_id = o.transaction_id
+            LEFT JOIN transactions_inputs i ON i.previous_outpoint_hash = t.transaction_id AND i.previous_outpoint_index = o.index
+            WHERE o.script_public_key_address = :spectreAddress
+            ORDER by t.block_time DESC
+            LIMIT 500"""),
+            {"spectreAddress": spectreAddress},
+        )
 
         resp = resp.all()
 
     # build response
     tx_list = []
     for x in resp:
-        tx_list.append({"tx_received": x[0],
-                        "tx_spent": x[2]})
-    return {
-        "transactions": tx_list
-    }
+        tx_list.append(
+            {
+                "tx_received": x[0].hex() if x[0] is not None else None,
+                "tx_spent": x[1].hex() if x[1] is not None else None,
+            }
+        )
+    return {"transactions": tx_list}
 
 
-@app.get("/addresses/{spectreAddress}/full-transactions",
-         response_model=List[TxModel],
-         response_model_exclude_unset=True,
-         tags=["Spectre addresses"])
+@app.get(
+    "/addresses/{spectreAddress}/full-transactions",
+    response_model=List[TxModel],
+    response_model_exclude_unset=True,
+    tags=["Spectre addresses"],
+    openapi_extra={"strict_query_params": True},
+)
 @sql_db_only
 async def get_full_transactions_for_address(
-        spectreAddress: str = Path(
-            description="Spectre address as string e.g. " + SPECTRE_ADDRESS_PREFIX +
-                        ":pzhh76qc82wzduvsrd9xh4zde9qhp0xc8rl7qu2mvl2e42uvdqt75zrcgpm00",
-            regex="^" + SPECTRE_ADDRESS_PREFIX + "\:[a-z0-9]{61,63}$"),
-        limit: int = Query(
-            description="The number of records to get",
-            ge=1,
-            le=500,
-            default=50),
-        offset: int = Query(
-            description="The offset from which to get records",
-            ge=0,
-            default=0),
-        fields: str = "",
-        resolve_previous_outpoints: PreviousOutpointLookupMode =
-        Query(default="no",
-              description=DESC_RESOLVE_PARAM)):
+    spectreAddress: str = Path(
+        description="Spectre address as string e.g. " f"{ADDRESS_EXAMPLE}", regex=REGEX_SPECTRE_ADDRESS
+    ),
+    limit: int = Query(description="The number of records to get", ge=1, le=500, default=50),
+    offset: int = Query(description="The offset from which to get records", ge=0, default=0),
+    fields: str = "",
+    resolve_previous_outpoints: PreviousOutpointLookupMode = Query(default="no", description=DESC_RESOLVE_PARAM),
+):
     """
     Get all transactions for a given address from database.
     And then get their related full transaction data
@@ -117,29 +128,98 @@ async def get_full_transactions_for_address(
     async with async_session() as s:
         # Doing it this way as opposed to adding it directly in the IN clause
         # so I can re-use the same result in tx_list, TxInput and TxOutput
-        tx_within_limit_offset = await s.execute(select(TxAddrMapping.transaction_id)
-                                                 .filter(TxAddrMapping.address == spectreAddress)
-                                                 .limit(limit)
-                                                 .offset(offset)
-                                                 .order_by(TxAddrMapping.block_time.desc())
-                                                 )
+        tx_within_limit_offset = await s.execute(
+            select(TxAddrMapping.transaction_id)
+            .filter(TxAddrMapping.address == spectreAddress)
+            .limit(limit)
+            .offset(offset)
+            .order_by(TxAddrMapping.block_time.desc())
+        )
 
         tx_ids_in_page = [x[0] for x in tx_within_limit_offset.all()]
 
-    return await search_for_transactions(TxSearch(transactionIds=tx_ids_in_page),
-                                         fields,
-                                         resolve_previous_outpoints)
+    return await search_for_transactions(TxSearch(transactionIds=tx_ids_in_page), fields, resolve_previous_outpoints)
 
 
-@app.get("/addresses/{spectreAddress}/transactions-count",
-         response_model=TransactionCount,
-         tags=["Spectre addresses"])
+@app.get(
+    "/addresses/{spectreAddress}/full-transactions-page",
+    response_model=List[TxModel],
+    response_model_exclude_unset=True,
+    tags=["Spectre addresses"],
+    openapi_extra={"strict_query_params": True},
+)
+@sql_db_only
+async def get_full_transactions_for_address_page(
+    response: Response,
+    spectreAddress: str = Path(
+        description="Spectre address as string e.g. " f"{ADDRESS_EXAMPLE}", regex=REGEX_SPECTRE_ADDRESS
+    ),
+    limit: int = Query(
+        description="The max number of records to get. "
+        "For paging combine with using 'before' from oldest previous result, "
+        "repeat until an **empty** resultset is returned."
+        "The actual number of transactions returned can be higher if there are transactions with the same block time at the limit.",
+        ge=1,
+        le=500,
+        default=50,
+    ),
+    before: int = Query(
+        description="Only include transactions with block time before this (epoch-millis)", ge=0, default=0
+    ),
+    fields: str = "",
+    resolve_previous_outpoints: PreviousOutpointLookupMode = Query(default="no", description=DESC_RESOLVE_PARAM),
+):
+    """
+    Get all transactions for a given address from database.
+    And then get their related full transaction data
+    """
+
+    async with async_session() as s:
+        # Doing it this way as opposed to adding it directly in the IN clause
+        # so I can re-use the same result in tx_list, TxInput and TxOutput
+        before = int(time.time() * 1000) if before == 0 else before
+        tx_within_limit_before = await s.execute(
+            select(TxAddrMapping.transaction_id, TxAddrMapping.block_time)
+            .filter(TxAddrMapping.address == spectreAddress)
+            .filter(TxAddrMapping.block_time < before)
+            .limit(limit)
+            .order_by(TxAddrMapping.block_time.desc())
+        )
+
+        tx_ids_and_block_times = [(x.transaction_id, x.block_time) for x in tx_within_limit_before.all()]
+        if not tx_ids_and_block_times:
+            return []
+
+        tx_ids = {tx_id for tx_id, block_time in tx_ids_and_block_times}
+        oldest_block_time = tx_ids_and_block_times[-1][1]
+
+        if len(tx_ids_and_block_times) == limit:
+            # To avoid gaps when transactions with the same block_time are at the boundry between pages.
+            # Get the time of the last transaction and fetch additional transactions for the same address and timestamp
+            tx_with_same_block_time = await s.execute(
+                select(TxAddrMapping.transaction_id)
+                .filter(TxAddrMapping.address == spectreAddress)
+                .filter(TxAddrMapping.block_time == oldest_block_time)
+            )
+            tx_ids.update([x for x in tx_with_same_block_time.scalars().all()])
+
+    response.headers["X-Current-Page"] = str(len(tx_ids))
+    response.headers["X-Oldest-Epoch-Millis"] = str(oldest_block_time)
+
+    return await search_for_transactions(TxSearch(transactionIds=list(tx_ids)), fields, resolve_previous_outpoints)
+
+
+@app.get(
+    "/addresses/{spectreAddress}/transactions-count",
+    response_model=TransactionCount,
+    tags=["Spectre addresses"],
+    openapi_extra={"strict_query_params": True},
+)
 @sql_db_only
 async def get_transaction_count_for_address(
-        spectreAddress: str = Path(
-            description="Spectre address as string e.g. " + SPECTRE_ADDRESS_PREFIX +
-                        ":pzhh76qc82wzduvsrd9xh4zde9qhp0xc8rl7qu2mvl2e42uvdqt75zrcgpm00",
-            regex="^" + SPECTRE_ADDRESS_PREFIX + "\:[a-z0-9]{61,63}$")
+    spectreAddress: str = Path(
+        description="Spectre address as string e.g. " f"{ADDRESS_EXAMPLE}", regex=REGEX_SPECTRE_ADDRESS
+    ),
 ):
     """
     Count the number of transactions associated with this address
@@ -151,3 +231,33 @@ async def get_transaction_count_for_address(
         tx_count = await s.execute(count_query)
 
     return TransactionCount(total=tx_count.scalar())
+
+
+@app.get(
+    "/addresses/{spectreAddress}/name",
+    response_model=AddressName | None,
+    tags=["Spectre addresses"],
+    openapi_extra={"strict_query_params": True},
+)
+@sql_db_only
+async def get_name_for_address(
+    response: Response,
+    spectreAddress: str = Path(
+        description="Spectre address as string e.g. "
+        "spectre:qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqkx9awp4e",
+        regex=REGEX_SPECTRE_ADDRESS,
+    ),
+):
+    """
+    Get the name for an address
+    """
+    async with async_session() as s:
+        r = (await s.execute(select(AddressKnown).filter(AddressKnown.address == spectreAddress))).first()
+
+    response.headers["Cache-Control"] = "public, max-age=600"
+    if r:
+        return AddressName(address=r.AddressKnown.address, name=r.AddressKnown.name)
+    else:
+        raise HTTPException(
+            status_code=404, detail="Address name not found", headers={"Cache-Control": "public, max-age=600"}
+        )
