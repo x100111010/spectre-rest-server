@@ -146,6 +146,46 @@ async def get_blocks_from_bluescore(response: Response, blueScore: int = 4367917
     return result
 
 
+@app.get("/blocks-from-last/{numBlocks}", response_model=List[ExtraModel], tags=["Spectre blocks"])
+async def get_blocks_from_last_n_blocks(
+    response: Response, numBlocks: int = Path(..., ge=1), includeTransactions: bool = False
+):
+    """
+    Lists the last 'numBlocks' starting from the current block, and returns the block hash, blue score, miner's payload, difficulty, and timestamp.
+    """
+    response.headers["X-Data-Source"] = "Database"
+
+    current_blue_score = current_blue_score_data["blue_score"]
+    start_blue_score = max(0, current_blue_score - numBlocks)
+
+    async with async_session() as s:
+        blocks = (
+            await s.execute(
+                block_join_query()
+                .where(Block.blue_score.between(start_blue_score, current_blue_score))
+                .order_by(Block.blue_score)
+            )
+        ).all()
+
+    result = []
+    for block, _, _, _, _ in blocks:
+        miner_payload = get_miner_payload_from_block(block)
+        miner_info, miner_address = retrieve_miner_info_from_payload(miner_payload)
+
+        result.append(
+            {
+                "blockHash": block.hash,
+                "blueScore": block.blue_score,
+                "minerInfo": miner_info,
+                "minerAddress": miner_address,
+                "difficulty": block.difficulty,
+                "timestamp": block.timestamp,
+            }
+        )
+
+    return result
+
+
 async def get_block_from_db(blockId, includeTransactions):
     async with async_session() as s:
         block = (await s.execute(block_join_query().where(Block.hash == blockId).limit(1))).first()
